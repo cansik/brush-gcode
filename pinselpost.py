@@ -1,27 +1,22 @@
+import argparse
 import math
 import re
+import os
 
-input_name = "circles.nc"
-retract_height = 15.0
-dip_height = 2.0
-color_x = 0.0
-color_y = -30.0
-
-feed_rate = 2000.0
-
-max_distance = 25.0
-
+# regex for data parsing
 regexX = r".*[xX](-?\d+\.?\d*).*"
 regexY = r".*[yY](-?\d+\.?\d*).*"
 regexZ = r".*[zZ](-?\d+\.?\d*).*"
 regexG0 = r".*(G0).*"
 regexG1 = r".*(G1).*"
 
-lx = 0
-ly = 0
-lz = retract_height
 
-is_first_dip = True
+def coords2d(s):
+    try:
+        x, y = map(int, s.split(','))
+        return x, y
+    except:
+        raise argparse.ArgumentTypeError("Coordinates must be x,y")
 
 
 def write(filename, code):
@@ -34,21 +29,22 @@ def read(filename):
         return out_file.read()
 
 
-def goto_color(code):
+def goto_color(code, args, lx, ly, lz):
     goto = [
         "; get color",
-        "G00 Z%.2f F%.2f" % (retract_height, feed_rate),
-        "G00 X%.2f Y%.2f" % (color_x, color_y),
-        "G00 Z%.2f" % dip_height,
-        "G00 Z%.2f" % retract_height,
+        "G00 Z%.2f F%.2f" % (args.retract_height, args.feed_rate),
+        "G00 X%.2f Y%.2f" % args.pot_position,
+        "G00 Z%.2f" % args.dip_height,
+        "G00 Z%.2f" % args.retract_height,
         "G00 X%.2f Y%.2f" % (lx, ly),
-        "G00 Z%.2f" % (lz),
+        "G00 Z%.2f" % lz,
         "G01",
         "; proceed"
     ]
 
     for line in goto:
         code.append(line)
+
 
 def calculate_distance(starting_x, starting_y, destination_x, destination_y):
     distance = math.hypot(destination_x - starting_x,
@@ -63,68 +59,116 @@ def calculate_path(selected_map, dist_travel=0):
                                           selected_map[i][1])
     return dist_travel
 
+
 # main code
-lines = read(input_name).split("\n")
-output = []
+def main():
+    # read arguments
+    parser = argparse.ArgumentParser()
 
-path = []
-is_drill_mode = False
-is_first_drill_mode_step = False
+    # file variables
+    parser.add_argument("-i", "--input", type=str, required=True,
+                        help="Input gcode file path.")
+    parser.add_argument("-o", "--output", type=str, default=None,
+                        help="Output gcode file path by default '_brush' is added as postfix.")
 
-for i, line in enumerate(lines):
-    rg0 = re.match(regexG0, line)
-    rg1 = re.match(regexG1, line)
+    # path variables
+    parser.add_argument("-d", "--max-distance", type=float, default=25.0,
+                        help="Max distance to travel before pot dipping in mm.")
 
-    # check if need more color
-    if rg0 is not None:
-        is_drill_mode = False
-        if is_first_dip:
-            goto_color(output)
-            is_first_dip = False
+    # pot variables
+    parser.add_argument("-pp", "--pot-position", type=coords2d, default="0,-30",
+                        help="Coordinate of the paint pot.")
+    parser.add_argument("-rh", "--retract-height", type=float, default=15.0,
+                        help="Retract height in mm for pot dipping (should be higher than the pot).")
+    parser.add_argument("-dh", "--dip-height", type=float, default=2.0,
+                        help="Dip height in mm for pot dipping (should be less than zero because of pot-bottom).")
 
-    if rg1 is not None:
-        if not is_drill_mode:
-            is_first_drill_mode_step = True
-            path.clear()
-        is_drill_mode = True
+    # machine variables
+    parser.add_argument("-fr", "--feed-rate", type=float, default=2000.0,
+                        help="Feed rate in mm/min for dipping process.")
 
-    if is_drill_mode:
-        if not is_first_drill_mode_step:
-            path.append((lx, ly))
+    args = parser.parse_args()
 
-        d = calculate_path(path)
+    # run post-processor
+    lines = read(args.input).split("\n")
+    output = []
 
-        print(d)
+    # variables
+    lx = 0
+    ly = 0
+    lz = args.retract_height
 
-        if d >= max_distance:
-            output.append("; %s" % path)
-            output.append("; over: %d" % d)
+    is_first_dip = True
 
-            print("get color")
-            path.clear()
-            goto_color(output)
+    path = []
+    is_drill_mode = False
+    is_first_drill_mode_step = False
 
-        # store positions
-        rx = re.match(regexX, line)
-        if rx is not None:
-            lx = float(rx.group(1))
+    for i, line in enumerate(lines):
+        rg0 = re.match(regexG0, line)
+        rg1 = re.match(regexG1, line)
 
-        ry = re.match(regexY, line)
-        if ry is not None:
-            ly = float(ry.group(1))
+        # check if need more color
+        if rg0 is not None:
+            is_drill_mode = False
+            if is_first_dip:
+                goto_color(output, args, lx, ly, lz)
+                is_first_dip = False
 
-        rz = re.match(regexZ, line)
-        if rz is not None:
-            lz = float(rz.group(1))
+        if rg1 is not None:
+            if not is_drill_mode:
+                is_first_drill_mode_step = True
+                path.clear()
+            is_drill_mode = True
 
-        # fix drill mode switch
-        if is_first_drill_mode_step and rx is not None and ry is not None:
-            path.append((lx, ly))
-            is_first_drill_mode_step = False
+        if is_drill_mode:
+            if not is_first_drill_mode_step:
+                path.append((lx, ly))
 
-    # append original line
-    output.append(line)
+            d = calculate_path(path)
 
-output.append("G00 Z%.2f" % retract_height)
-output.append("G00 X%.2f Y%.2f" % (0, 0))
-write("pinsel_%s" % input_name, "\n".join(output))
+            print(d)
+
+            if d >= args.max_distance:
+                output.append("; %s" % path)
+                output.append("; over: %d" % d)
+
+                print("get color")
+                path.clear()
+                goto_color(output, args, lx, ly, lz)
+
+            # store positions
+            rx = re.match(regexX, line)
+            if rx is not None:
+                lx = float(rx.group(1))
+
+            ry = re.match(regexY, line)
+            if ry is not None:
+                ly = float(ry.group(1))
+
+            rz = re.match(regexZ, line)
+            if rz is not None:
+                lz = float(rz.group(1))
+
+            # fix drill mode switch
+            if is_first_drill_mode_step and rx is not None and ry is not None:
+                path.append((lx, ly))
+                is_first_drill_mode_step = False
+
+        # append original line
+        output.append(line)
+
+    output.append("G00 Z%.2f" % args.retract_height)
+    output.append("G00 X%.2f Y%.2f" % (0, 0))
+
+    file_name, ext = os.path.splitext(args.input)
+    output_name = "%s_brush.%s" % (file_name, ext)
+    if args.output is not None:
+        output_name = args.output
+
+    # write new file
+    write(output_name, "\n".join(output))
+
+
+if __name__ == "__main__":
+    main()
