@@ -2,6 +2,7 @@ import argparse
 import math
 import re
 import os
+import logging
 
 # regex for data parsing
 regexX = r".*[xX](-?\d+\.?\d*).*"
@@ -88,13 +89,19 @@ def main():
     parser.add_argument("-fr", "--feed-rate", type=float, default=2000.0,
                         help="Feed rate in mm/min for dipping process.")
 
+    # logging
+    parser.add_argument("--log-level", default=logging.INFO, type=lambda x: getattr(logging, x),
+                        help="Configure the logging level.")
+
     args = parser.parse_args()
+    logging.basicConfig(level=args.log_level)
 
     # run post-processor
     lines = read(args.input).split("\n")
     output = []
 
     print("post-processing %s..." % args.input)
+    logging.debug("debug enabled")
 
     # variables
     lx = 0
@@ -117,33 +124,41 @@ def main():
         # check if need more color
         if rg0 is not None:
             is_drill_mode = False
+            logging.debug("switch to JOG mode")
             if is_first_dip:
+                logging.debug("add FIRST DIP")
                 goto_color(output, args, lx, ly, lz)
                 refill_count += 1
                 is_first_dip = False
 
         if rg1 is not None:
             if not is_drill_mode:
+                logging.debug("clear PATH")
                 is_first_drill_mode_step = True
+                # why is path cleared here?!
                 path.clear()
             is_drill_mode = True
+            logging.debug("switch to DRILL mode")
 
         if is_drill_mode:
             if not is_first_drill_mode_step:
                 path.append((lx, ly))
 
             d = calculate_path(path)
-            total_distance += d
+            logging.debug("distance: %d mm" % d)
 
             if d >= args.max_distance:
-                output.append("; %s" % path)
                 output.append("; over: %d" % d)
                 path.clear()
                 goto_color(output, args, lx, ly, lz)
 
-                print("  [%d] paint refill @ %d mm (overflow = %.2f mm)"
-                      % (refill_count, total_distance, d - args.max_distance))
+                total_distance += d
+
+                print("  [%d]\tpaint refill @ %.2f cm\t(overflow = %.2f mm)"
+                      % (refill_count, total_distance / 10.0, d - args.max_distance))
                 refill_count += 1
+
+                # path.clear()
 
             # store positions
             rx = re.match(regexX, line)
@@ -170,7 +185,7 @@ def main():
     output.append("G00 X%.2f Y%.2f" % (0, 0))
 
     file_name, ext = os.path.splitext(args.input)
-    output_name = "%s_brush.%s" % (file_name, ext)
+    output_name = "%s_brush%s" % (file_name, ext)
     if args.output is not None:
         output_name = args.output
 
@@ -178,7 +193,7 @@ def main():
     write(output_name, "\n".join(output))
 
     print("added %d paint refills!" % refill_count)
-    print("saved file as %s", output_name)
+    print("saved file as %s" % output_name)
 
 
 if __name__ == "__main__":
