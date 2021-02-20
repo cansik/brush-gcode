@@ -47,8 +47,9 @@ def goto_color(code, args, lx, ly, lz):
 
 
 def calculate_distance(starting_x, starting_y, destination_x, destination_y):
+    # calculates Euclidean distance (straight-line) distance between two points
     distance = math.hypot(destination_x - starting_x,
-                          destination_y - starting_y)  # calculates Euclidean distance (straight-line) distance between two points
+                          destination_y - starting_y)
     return distance
 
 
@@ -93,6 +94,8 @@ def main():
     lines = read(args.input).split("\n")
     output = []
 
+    print("post-processing %s..." % args.input)
+
     # variables
     lx = 0
     ly = 0
@@ -104,6 +107,9 @@ def main():
     is_drill_mode = False
     is_first_drill_mode_step = False
 
+    total_distance = 0
+    refill_count = 0
+
     for i, line in enumerate(lines):
         rg0 = re.match(regexG0, line)
         rg1 = re.match(regexG1, line)
@@ -113,6 +119,7 @@ def main():
             is_drill_mode = False
             if is_first_dip:
                 goto_color(output, args, lx, ly, lz)
+                refill_count += 1
                 is_first_dip = False
 
         if rg1 is not None:
@@ -126,16 +133,17 @@ def main():
                 path.append((lx, ly))
 
             d = calculate_path(path)
-
-            print(d)
+            total_distance += d
 
             if d >= args.max_distance:
                 output.append("; %s" % path)
                 output.append("; over: %d" % d)
-
-                print("get color")
                 path.clear()
                 goto_color(output, args, lx, ly, lz)
+
+                print("  [%d] paint refill @ %d mm (overflow = %.2f mm)"
+                      % (refill_count, total_distance, d - args.max_distance))
+                refill_count += 1
 
             # store positions
             rx = re.match(regexX, line)
@@ -168,6 +176,9 @@ def main():
 
     # write new file
     write(output_name, "\n".join(output))
+
+    print("added %d paint refills!" % refill_count)
+    print("saved file as %s", output_name)
 
 
 if __name__ == "__main__":
