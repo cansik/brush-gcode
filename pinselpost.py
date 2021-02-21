@@ -4,12 +4,7 @@ import re
 import os
 import logging
 
-# regex for data parsing
-regexX = r".*[xX](-?\d+\.?\d*).*"
-regexY = r".*[yY](-?\d+\.?\d*).*"
-regexZ = r".*[zZ](-?\d+\.?\d*).*"
-regexG0 = r".*(G0).*"
-regexG1 = r".*(G1).*"
+from gcode_analyser import extract_steps, ToolStep
 
 
 def coords2d(s):
@@ -30,41 +25,27 @@ def read(filename):
         return out_file.read()
 
 
-def goto_color(code, args, lx, ly, lz):
+def goto_color(code, args, step: ToolStep, continue_painting: bool):
     goto = [
         "(REFILL START)",
-        "G00 Z%.2f F%.2f" % (args.retract_height, args.feed_rate),
-        "G00 X%.2f Y%.2f" % args.pot_position,
-        "G00 Z%.2f" % args.dip_height,
-        "G00 Z%.2f" % args.retract_height,
-        "G00 X%.2f Y%.2f" % (lx, ly),
-        "G00 Z%.2f" % lz,
-        "G01",
-        "(REFILL END)"
+        "G0 Z%.2f F%.2f" % (args.retract_height, args.feed_rate),
+        "G0 X%.2f Y%.2f" % args.pot_position,
+        "G0 Z%.2f" % args.dip_height,
+        "G0 Z%.2f" % args.retract_height
     ]
+
+    if step is not None:
+        goto.append("G0 X%.2f Y%.2f" % (step.x, step.y))
+
+    if continue_painting:
+        goto.append("(continue painting)")
+        goto.append("G0 Z%.2f" % step.z)
+        goto.append("G1")
+
+    goto.append("(REFILL END)")
 
     for line in goto:
         code.append(line)
-
-
-def calculate_distance(starting_x, starting_y, destination_x, destination_y):
-    # calculates Euclidean distance (straight-line) distance between two points
-    distance = math.hypot(destination_x - starting_x,
-                          destination_y - starting_y)
-    return distance
-
-
-def lerp(starting_x, starting_y, destination_x, destination_y, value):
-    inv = 1.0 - value
-    return destination_x * value + inv * starting_x, destination_y * value + inv * starting_y
-
-
-def calculate_path(selected_map, dist_travel=0):
-    for i in range(len(selected_map) - 1):
-        dist_travel += calculate_distance(selected_map[i - len(selected_map) + 1][0],
-                                          selected_map[i - len(selected_map) + 1][1], selected_map[i][0],
-                                          selected_map[i][1])
-    return dist_travel
 
 
 # main code
@@ -111,117 +92,72 @@ def main():
     logging.debug("debug enabled")
 
     # variables
-    lx = 0
-    ly = 0
-    lz = args.retract_height
-
     is_first_dip = True
-
-    is_drill_mode = False
-    mode_switch = False
-
     current_distance = 0
-
     total_distance = 0
     refill_count = 0
+    refill_requested = False
+    skip_step = False
 
-    for i, line in enumerate(lines):
-        rg0 = re.match(regexG0, line)
-        rg1 = re.match(regexG1, line)
+    # commands
+    steps = extract_steps(lines)
+    last_feed_tool_step = None
 
-        # check mode
-        if rg0 is not None:
-            if is_drill_mode:
-                mode_switch = True
-
-            is_drill_mode = False
-            logging.debug("JOG MODE")
-
+    for i, step in enumerate(steps):
+        if isinstance(step, ToolStep):
+            # first dip
             if is_first_dip:
                 logging.debug("ADD FIRST DIP")
-                goto_color(output, args, lx, ly, lz)
+                goto_color(output, args, step, False)
                 refill_count += 1
                 is_first_dip = False
 
-        if rg1 is not None:
-            if not is_drill_mode:
-                mode_switch = True
+            # fulfill refill request
+            if refill_requested:
+                refill_requested = False
 
-            is_drill_mode = True
-            logging.debug("DRILL MODE")
+                # skip paint-prepare after refill if next step is feed-mode or not relevant in 2d
+                # split in two: preparation for painting only if in feed_mode and distance > 0
+                # skip moving entirely if is not in feed mode
+                if step.is_feed_mode():
+                    if last_feed_tool_step.distance_2d(step) > 0:
+                        goto_color(output, args, last_feed_tool_step, True)
+                    else:
+                        goto_color(output, args, step, False)
+                        skip_step = True
+                else:
+                    goto_color(output, args, None, False)
 
-        if mode_switch:
-            logging.debug("MODE SWITCH")
+                print("  [%d]\tpaint refill @ %.2f cm\t(overflow = %.2f mm)"
+                      % (refill_count, total_distance / 10.0, current_distance - args.max_distance))
 
-        nx = lx
-        ny = ly
-        nz = lz
+                current_distance = 0
+                refill_count += 1
 
-        # store positions
-        rx = re.match(regexX, line)
-        if rx is not None:
-            nx = float(rx.group(1))
+            # check distance
+            if step.is_feed_mode():
+                if last_feed_tool_step is not None:
+                    # calculate distance after 2. feed tool step
+                    distance = last_feed_tool_step.distance_2d(step)
+                    current_distance += distance
 
-        ry = re.match(regexY, line)
-        if ry is not None:
-            ny = float(ry.group(1))
+                    # check distance
+                    if current_distance >= args.max_distance:
+                        refill_requested = True
+                        logging.debug("REFILL REQUESTED")
+                        total_distance += current_distance
 
-        rz = re.match(regexZ, line)
-        if rz is not None:
-            nz = float(rz.group(1))
+                last_feed_tool_step = step
+            else:
+                # step feed tool step to none (jump in tool-path)
+                last_feed_tool_step = None
 
-        # append distance
-        if is_drill_mode and not mode_switch:
-            d = calculate_distance(lx, ly, nx, ny)
-            target_distance = current_distance + d
+        # append gcode command line
+        if not skip_step:
+            output.append(step.generate_gcode())
+        skip_step = False
 
-            if args.split_path:
-                total_split_distance = 0
-                current_split_distance = 0
-                while target_distance >= args.max_distance:
-                    step_length = args.max_distance
-
-                    total_split_distance += step_length
-                    current_split_distance += step_length
-
-                    norm_step = min(1.0, total_split_distance / d)
-
-                    output.append("(ADDITIONAL STEP X%.2f)" % norm_step)
-                    logging.debug("STEP AT %0.2f" % norm_step)
-
-                    # calculate intermediate sizes a
-                    ix, iy = lerp(lx, ly, nx, ny, norm_step)
-                    output.append("G01 X%.2f Y%.2f" % (ix, iy))
-
-                    # check if color is needed
-                    if current_split_distance >= args.max_distance:
-                        goto_color(output, args, ix, iy, lz)
-                        current_split_distance = 0
-
-                    target_distance -= step_length
-
-            current_distance = target_distance
-
-        # append original line
-        output.append(line)
-
-        if current_distance >= args.max_distance:
-            goto_color(output, args, nx, ny, nz)
-            logging.debug("REFILL")
-
-            total_distance += current_distance
-
-            print("  [%d]\tpaint refill @ %.2f cm\t(overflow = %.2f mm)"
-                  % (refill_count, total_distance / 10.0, current_distance - args.max_distance))
-            refill_count += 1
-
-            current_distance = 0
-
-        mode_switch = False
-        lx = nx
-        ly = ny
-        lz = nz
-
+    # append go to zero afterwards
     output.append("G00 Z%.2f" % args.retract_height)
     output.append("G00 X%.2f Y%.2f" % (0, 0))
 

@@ -2,3 +2,4 @@
 *.nc
 venv
 *.gcode
+*.pyc

@@ -2,6 +2,13 @@ import math
 import re
 from enum import Enum
 
+# regex for data parsing
+regexX = r".*[xX](-?\d+\.?\d*).*"
+regexY = r".*[yY](-?\d+\.?\d*).*"
+regexZ = r".*[zZ](-?\d+\.?\d*).*"
+regexFeedRate = r".*[fF](-?\d+\.?\d*).*"
+regexGCommand = r".*([gG](\d+)).*"
+
 
 class FeedMode(Enum):
     DEFAULT = ""
@@ -50,13 +57,13 @@ class ToolStep(CodeStep):
         # check if feed mode or feed rate are available
         # (otherwise use machine default)
         if self.feed_mode is not FeedMode.DEFAULT:
-            line.append("%s" % self.feed_mode)
+            line.append("%s " % self.feed_mode.name)
 
         # add position
-        line.append("X%.2fY%.2fZ%.2f" % (self.x, self.y, self.z))
+        line.append("X%.2f Y%.2f Z%.2f" % (self.x, self.y, self.z))
 
         if self.feed_rate is not math.inf:
-            line.append("F%.2f" % self.feed_rate)
+            line.append(" F%.2f" % self.feed_rate)
 
         return "".join(line)
 
@@ -90,14 +97,6 @@ class ToolStep(CodeStep):
         return temp
 
 
-# regex for data parsing
-regexX = r".*[xX](-?\d+\.?\d*).*"
-regexY = r".*[yY](-?\d+\.?\d*).*"
-regexZ = r".*[zZ](-?\d+\.?\d*).*"
-regexFeedRate = r".*[fF](-?\d+\.?\d*).*"
-regexGMode = r".*([gG][0123]).*"
-
-
 def extract_steps(lines: [str]) -> [CodeStep]:
     steps: [CodeStep] = []
 
@@ -109,12 +108,13 @@ def extract_steps(lines: [str]) -> [CodeStep]:
         # todo: strip away line and inline comments before processing
 
         # FEED MODE PARSING
-        r_gmode = re.match(regexGMode, line)
+        r_gcommand = re.match(regexGCommand, line)
 
-        if r_gmode is not None:
-            mode = r_gmode.group(1)
-            current_toolstep.feed_mode = FeedMode[mode.upper()]
-            is_toolstep_line = True
+        if r_gcommand is not None:
+            mode = int(r_gcommand.group(2))
+            if 0 <= mode <= 3:
+                current_toolstep.feed_mode = FeedMode["G%d" % mode]
+                is_toolstep_line = True
 
         # POSITION PARSING
         rx = re.match(regexX, line)
