@@ -54,6 +54,11 @@ def calculate_distance(starting_x, starting_y, destination_x, destination_y):
     return distance
 
 
+def lerp(starting_x, starting_y, destination_x, destination_y, value):
+    inv = 1.0 - value
+    return destination_x * value + inv * starting_x, destination_y * value + inv * starting_y
+
+
 def calculate_path(selected_map, dist_travel=0):
     for i in range(len(selected_map) - 1):
         dist_travel += calculate_distance(selected_map[i - len(selected_map) + 1][0],
@@ -76,6 +81,8 @@ def main():
     # path variables
     parser.add_argument("-d", "--max-distance", type=float, default=25.0,
                         help="Max distance to travel before pot dipping in mm.")
+    parser.add_argument("-split-path", action='store_true',
+                        help="If True paths are split into smaller chunks to avoid brush draining.")
 
     # pot variables
     parser.add_argument("-pp", "--pot-position", type=coords2d, default="0,-30",
@@ -165,13 +172,42 @@ def main():
 
         # append distance
         if is_drill_mode and not mode_switch:
-            current_distance += calculate_distance(lx, ly, nx, ny)
+            d = calculate_distance(lx, ly, nx, ny)
+            target_distance = current_distance + d
+
+            if args.split_path:
+                total_split_distance = 0
+                current_split_distance = 0
+                while target_distance >= args.max_distance:
+                    step_length = args.max_distance
+
+                    total_split_distance += step_length
+                    current_split_distance += step_length
+
+                    norm_step = min(1.0, total_split_distance / d)
+
+                    output.append("(ADDITIONAL STEP X%.2f)" % norm_step)
+                    logging.debug("STEP AT %0.2f" % norm_step)
+
+                    # calculate intermediate sizes a
+                    ix, iy = lerp(lx, ly, nx, ny, norm_step)
+                    output.append("G01 X%.2f Y%.2f" % (ix, iy))
+
+                    # check if color is needed
+                    if current_split_distance >= args.max_distance:
+                        goto_color(output, args, ix, iy, lz)
+                        current_split_distance = 0
+
+                    target_distance -= step_length
+
+            current_distance = target_distance
 
         # append original line
         output.append(line)
 
         if current_distance >= args.max_distance:
             goto_color(output, args, nx, ny, nz)
+            logging.debug("REFILL")
 
             total_distance += current_distance
 
