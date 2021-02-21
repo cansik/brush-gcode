@@ -1,10 +1,41 @@
 import argparse
-import math
-import re
-import os
 import logging
+import os
+import random
 
 from gcode_analyser import extract_steps, ToolStep
+
+
+class PotCycleStrategy(object):
+    def __init__(self, pots: [(float, float)], iterations: int, is_random: bool):
+        self._index = 0
+        self._iteration = 0
+
+        self.pots = pots
+        self.iterations = iterations
+        self.is_random = is_random
+
+    def cycle(self):
+        # do nothing if only one pot is available
+        if len(self.pots) == 1:
+            return
+
+        # check if cycle is necessary (-1 to allow 1 be 1 iteration)
+        if self._iteration < self.iterations - 1:
+            self._iteration += 1
+            return
+
+        # switch pot
+        if self.is_random:
+            self._index = random.randrange(len(self.pots))
+        else:
+            self._index = (self._index + 1) % len(self.pots)
+
+        logging.debug("SWITCH POD TO %d" % self._index)
+        self._iteration = 0
+
+    def current_pot(self) -> (float, float):
+        return self.pots[self._index]
 
 
 def coords2d(s):
@@ -25,11 +56,11 @@ def read(filename):
         return out_file.read()
 
 
-def goto_color(code, args, step: ToolStep, continue_painting: bool):
+def goto_color(code, args, step: ToolStep, continue_painting: bool, pot_cycle_strategy: PotCycleStrategy):
     goto = [
         "(REFILL START)",
         "G0 Z%.2f F%.2f" % (args.retract_height, args.feed_rate),
-        "G0 X%.2f Y%.2f" % args.pot_position,
+        "G0 X%.2f Y%.2f" % pot_cycle_strategy.current_pot(),
         "G0 Z%.2f" % args.dip_height,
         "G0 Z%.2f" % args.retract_height
     ]
@@ -46,6 +77,8 @@ def goto_color(code, args, step: ToolStep, continue_painting: bool):
 
     for line in goto:
         code.append(line)
+
+    pot_cycle_strategy.cycle()
 
 
 # main code
@@ -66,8 +99,12 @@ def main():
                         help="If True paths are split into smaller chunks to avoid brush draining.")
 
     # pot variables
-    parser.add_argument("-pp", "--pot-position", type=coords2d, default="0,-30",
-                        help="Coordinate of the paint pot.")
+    parser.add_argument("-pp", "--pot-positions", type=coords2d, default=[(0, -30)], nargs='+',
+                        help="Coordinate(s) of the paint pot(s). Multiple pots are possible: 0,-30 20,-30")
+    parser.add_argument("-pi", "--pot-iterations", type=int, default=1,
+                        help="Number of pot iterations before the next pot is selected.")
+    parser.add_argument("-random-pot-cycle", action='store_true',
+                        help="If True pot cycles are randomly performed after n pot iterations.")
     parser.add_argument("-rh", "--retract-height", type=float, default=15.0,
                         help="Retract height in mm for pot dipping (should be higher than the pot).")
     parser.add_argument("-dh", "--dip-height", type=float, default=2.0,
@@ -99,6 +136,8 @@ def main():
     refill_requested = False
     skip_step = False
 
+    pot_cycle_strategy = PotCycleStrategy(args.pot_positions, args.pot_iterations, args.random_pot_cycle)
+
     # commands
     steps = extract_steps(lines)
     last_feed_tool_step = None
@@ -108,7 +147,7 @@ def main():
             # first dip
             if is_first_dip:
                 logging.debug("ADD FIRST DIP")
-                goto_color(output, args, step, False)
+                goto_color(output, args, step, False, pot_cycle_strategy)
                 refill_count += 1
                 is_first_dip = False
 
@@ -121,7 +160,7 @@ def main():
                 # skip moving entirely if is not in feed mode
                 if step.is_feed_mode():
                     if last_feed_tool_step.distance_2d(step) > 0:
-                        goto_color(output, args, last_feed_tool_step, True)
+                        goto_color(output, args, last_feed_tool_step, True, pot_cycle_strategy)
                     else:
                         # check if next is feed mode or not
                         # todo: warning: what if not g command?
@@ -133,9 +172,9 @@ def main():
                             pass
 
                         if next_step_mode:
-                            goto_color(output, args, None, False)
+                            goto_color(output, args, None, False, pot_cycle_strategy)
                         else:
-                            goto_color(output, args, step, False)
+                            goto_color(output, args, step, False, pot_cycle_strategy)
                         skip_step = True
                 else:
                     goto_color(output, args, None, False)
