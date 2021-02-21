@@ -106,28 +106,31 @@ def extract_steps(lines: [str]) -> [CodeStep]:
     for line in lines:
         is_toolstep_line = False
 
+        # todo: strip away line and inline comments before processing
+
         # FEED MODE PARSING
         r_gmode = re.match(regexGMode, line)
 
         if r_gmode is not None:
             mode = r_gmode.group(1)
             current_toolstep.feed_mode = FeedMode[mode.upper()]
+            is_toolstep_line = True
 
         # POSITION PARSING
         rx = re.match(regexX, line)
         if rx is not None:
-            is_toolstep_line = True
             current_toolstep.x = float(rx.group(1))
+            is_toolstep_line = True
 
         ry = re.match(regexY, line)
         if ry is not None:
-            is_toolstep_line = True
             current_toolstep.y = float(ry.group(1))
+            is_toolstep_line = True
 
         rz = re.match(regexZ, line)
         if rz is not None:
-            is_toolstep_line = True
             current_toolstep.z = float(rz.group(1))
+            is_toolstep_line = True
 
         # FEED RATE PARSING
         rf = re.match(regexFeedRate, line)
