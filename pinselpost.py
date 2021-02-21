@@ -32,7 +32,7 @@ def read(filename):
 
 def goto_color(code, args, lx, ly, lz):
     goto = [
-        "; get color",
+        "(REFILL START)",
         "G00 Z%.2f F%.2f" % (args.retract_height, args.feed_rate),
         "G00 X%.2f Y%.2f" % args.pot_position,
         "G00 Z%.2f" % args.dip_height,
@@ -40,7 +40,7 @@ def goto_color(code, args, lx, ly, lz):
         "G00 X%.2f Y%.2f" % (lx, ly),
         "G00 Z%.2f" % lz,
         "G01",
-        "; proceed"
+        "(REFILL END)"
     ]
 
     for line in goto:
@@ -110,9 +110,10 @@ def main():
 
     is_first_dip = True
 
-    path = []
     is_drill_mode = False
-    is_first_drill_mode_step = False
+    mode_switch = False
+
+    current_distance = 0
 
     total_distance = 0
     refill_count = 0
@@ -121,65 +122,69 @@ def main():
         rg0 = re.match(regexG0, line)
         rg1 = re.match(regexG1, line)
 
-        # check if need more color
+        # check mode
         if rg0 is not None:
+            if is_drill_mode:
+                mode_switch = True
+
             is_drill_mode = False
-            logging.debug("switch to JOG mode")
+            logging.debug("JOG MODE")
+
             if is_first_dip:
-                logging.debug("add FIRST DIP")
+                logging.debug("ADD FIRST DIP")
                 goto_color(output, args, lx, ly, lz)
                 refill_count += 1
                 is_first_dip = False
 
         if rg1 is not None:
             if not is_drill_mode:
-                logging.debug("clear PATH")
-                is_first_drill_mode_step = True
-                # why is path cleared here?!
-                path.clear()
+                mode_switch = True
+
             is_drill_mode = True
-            logging.debug("switch to DRILL mode")
+            logging.debug("DRILL MODE")
 
-        if is_drill_mode:
-            if not is_first_drill_mode_step:
-                path.append((lx, ly))
+        if mode_switch:
+            logging.debug("MODE SWITCH")
 
-            d = calculate_path(path)
-            logging.debug("distance: %d mm" % d)
+        nx = lx
+        ny = ly
+        nz = lz
 
-            if d >= args.max_distance:
-                output.append("; over: %d" % d)
-                path.clear()
-                goto_color(output, args, lx, ly, lz)
+        # store positions
+        rx = re.match(regexX, line)
+        if rx is not None:
+            nx = float(rx.group(1))
 
-                total_distance += d
+        ry = re.match(regexY, line)
+        if ry is not None:
+            ny = float(ry.group(1))
 
-                print("  [%d]\tpaint refill @ %.2f cm\t(overflow = %.2f mm)"
-                      % (refill_count, total_distance / 10.0, d - args.max_distance))
-                refill_count += 1
+        rz = re.match(regexZ, line)
+        if rz is not None:
+            nz = float(rz.group(1))
 
-                # path.clear()
-
-            # store positions
-            rx = re.match(regexX, line)
-            if rx is not None:
-                lx = float(rx.group(1))
-
-            ry = re.match(regexY, line)
-            if ry is not None:
-                ly = float(ry.group(1))
-
-            rz = re.match(regexZ, line)
-            if rz is not None:
-                lz = float(rz.group(1))
-
-            # fix drill mode switch
-            if is_first_drill_mode_step and rx is not None and ry is not None:
-                path.append((lx, ly))
-                is_first_drill_mode_step = False
+        # append distance
+        if is_drill_mode and not mode_switch:
+            current_distance += calculate_distance(lx, ly, nx, ny)
 
         # append original line
         output.append(line)
+
+        if current_distance >= args.max_distance:
+            goto_color(output, args, nx, ny, nz)
+
+            total_distance += current_distance
+
+            print("  [%d]\tpaint refill @ %.2f cm\t(overflow = %.2f mm)"
+                  % (refill_count, total_distance / 10.0, current_distance - args.max_distance))
+            refill_count += 1
+
+            current_distance = 0
+
+        mode_switch = False
+        lx = nx
+        ly = ny
+        lz = nz
 
     output.append("G00 Z%.2f" % args.retract_height)
     output.append("G00 X%.2f Y%.2f" % (0, 0))
