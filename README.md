@@ -7,7 +7,8 @@ A simple post-processor for gcode to enable brush dipping.
 usage: pinselpost.py [-h] -i INPUT [-o OUTPUT] [-d MAX_DISTANCE] [-split-path]
                      [-pp POT_POSITIONS [POT_POSITIONS ...]]
                      [-pi POT_ITERATIONS] [-random-pot-cycle]
-                     [-rh RETRACT_HEIGHT] [-dh DIP_HEIGHT] [-fr FEED_RATE]
+                     [-rh RETRACT_HEIGHT] [-dh DIP_HEIGHT]
+                     [-mdh MAX_DIP_HEIGHT] [-fr FEED_RATE]
                      [--log-level LOG_LEVEL]
 
 optional arguments:
@@ -35,6 +36,9 @@ optional arguments:
   -dh DIP_HEIGHT, --dip-height DIP_HEIGHT
                         Dip height in mm for pot dipping (should be less than
                         zero because of pot-bottom).
+  -mdh MAX_DIP_HEIGHT, --max-dip-height MAX_DIP_HEIGHT
+                        Maximum dip height in mm. If set the software will
+                        interpolate between dip-height and max-dip-height.
   -fr FEED_RATE, --feed-rate FEED_RATE
                         Feed rate in mm/min for dipping process.
   --log-level LOG_LEVEL

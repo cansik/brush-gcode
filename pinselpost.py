@@ -56,12 +56,19 @@ def read(filename):
         return out_file.read()
 
 
-def goto_color(code, args, step: ToolStep, continue_painting: bool, pot_cycle_strategy: PotCycleStrategy):
+def goto_color(code, args, step_id: int, step_count: int, step: ToolStep,
+               continue_painting: bool, pot_cycle_strategy: PotCycleStrategy):
+    # calculate current dip height
+    progress = step_id / float(step_count)
+    dip_height = args.max_dip_height * progress + (1.0 - progress) * args.dip_height
+    logging.debug("dip height: %.2fmm" % dip_height)
+
+    # add dip
     goto = [
         "(REFILL START)",
         "G0 Z%.2f F%.2f" % (args.retract_height, args.feed_rate),
         "G0 X%.2f Y%.2f" % pot_cycle_strategy.current_pot(),
-        "G0 Z%.2f" % args.dip_height,
+        "G0 Z%.2f" % dip_height,
         "G0 Z%.2f" % args.retract_height
     ]
 
@@ -109,6 +116,9 @@ def main():
                         help="Retract height in mm for pot dipping (should be higher than the pot).")
     parser.add_argument("-dh", "--dip-height", type=float, default=2.0,
                         help="Dip height in mm for pot dipping (should be less than zero because of pot-bottom).")
+    parser.add_argument("-mdh", "--max-dip-height", type=float, default=None,
+                        help="Maximum dip height in mm. "
+                             "If set the software will interpolate between dip-height and max-dip-height.")
 
     # machine variables
     parser.add_argument("-fr", "--feed-rate", type=float, default=2000.0,
@@ -120,6 +130,9 @@ def main():
 
     args = parser.parse_args()
     logging.basicConfig(level=args.log_level)
+
+    if args.max_dip_height is None:
+        args.max_dip_height = args.dip_height
 
     # run post-processor
     lines = read(args.input).split("\n")
@@ -147,7 +160,7 @@ def main():
             # first dip
             if is_first_dip:
                 logging.debug("ADD FIRST DIP")
-                goto_color(output, args, step, False, pot_cycle_strategy)
+                goto_color(output, args, i, len(steps), step, False, pot_cycle_strategy)
                 refill_count += 1
                 is_first_dip = False
 
@@ -160,7 +173,7 @@ def main():
                 # skip moving entirely if is not in feed mode
                 if step.is_feed_mode():
                     if last_feed_tool_step.distance_2d(step) > 0:
-                        goto_color(output, args, last_feed_tool_step, True, pot_cycle_strategy)
+                        goto_color(output, args, i, len(steps), last_feed_tool_step, True, pot_cycle_strategy)
                     else:
                         # check if next is feed mode or not
                         # todo: warning: what if not g command?
@@ -172,12 +185,12 @@ def main():
                             pass
 
                         if next_step_mode:
-                            goto_color(output, args, None, False, pot_cycle_strategy)
+                            goto_color(output, args, i, len(steps), None, False, pot_cycle_strategy)
                         else:
-                            goto_color(output, args, step, False, pot_cycle_strategy)
+                            goto_color(output, args, i, len(steps), step, False, pot_cycle_strategy)
                         skip_step = True
                 else:
-                    goto_color(output, args, None, False)
+                    goto_color(output, args, i, len(steps), None, False, pot_cycle_strategy)
 
                 print("  [%d]\tpaint refill @ %.2f cm\t(overflow = %.2f mm)"
                       % (refill_count, total_distance / 10.0, current_distance - args.max_distance))
