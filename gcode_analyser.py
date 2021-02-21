@@ -15,7 +15,7 @@ class FeedMode(Enum):
     G3 = "G3"
 
 
-class CodeStep:
+class CodeStep(object):
     def generate_gcode(self) -> str:
         pass
 
@@ -60,7 +60,27 @@ class ToolStep(CodeStep):
 
         return "".join(line)
 
-    def clone(self):
+    def distance_2d(self, step: 'ToolStep') -> float:
+        return math.sqrt(math.pow(self.x - step.x, 2) + math.pow(self.y - step.y, 2))
+
+    def distance_3d(self, step: 'ToolStep') -> float:
+        return math.sqrt(math.pow(self.x - step.x, 2) + math.pow(self.y - step.y, 2) + math.pow(self.z - step.z, 2))
+
+    def lerp_2d(self, dest: 'ToolStep', value: float) -> 'ToolStep':
+        new_step = self.clone()
+        inv = 1.0 - value
+        # just lerp positions
+        new_step.x = dest.x * value + inv * self.x
+        new_step.y = dest.y * value + inv * self.y
+        return new_step
+
+    def lerp_3d(self, dest: 'ToolStep', value: float) -> 'ToolStep':
+        new_step = self.lerp_2d(dest, value)
+        inv = 1.0 - value
+        new_step.z = dest.z * value + inv * self.z
+        return new_step
+
+    def clone(self) -> 'ToolStep':
         temp = ToolStep()
         temp.feed_mode = self.feed_mode
         temp.x = self.x
