@@ -123,7 +123,19 @@ def main():
                     if last_feed_tool_step.distance_2d(step) > 0:
                         goto_color(output, args, last_feed_tool_step, True)
                     else:
-                        goto_color(output, args, step, False)
+                        # check if next is feed mode or not
+                        # todo: warning: what if not g command?
+                        # it would be necessary to extract the next tool-step!
+                        next_step_mode = False
+                        try:
+                            next_step_mode = steps[i + 1].is_rapid_mode()
+                        except:
+                            pass
+
+                        if next_step_mode:
+                            goto_color(output, args, None, False)
+                        else:
+                            goto_color(output, args, step, False)
                         skip_step = True
                 else:
                     goto_color(output, args, None, False)
